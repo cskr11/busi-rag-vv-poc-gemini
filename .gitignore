@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg
+*.egg-info/
+*.whl
+
+# Environment (ignore the whole directory)
+.venv/
+.rag_env/
+env/
+venv/
+rag_env/
+ENV/
+env.bak/
+venv.bak/
+
+# RAG files (example pattern, adjust as needed)
+*.rag
+rag_output/
+rag_data/
+
+# General files to ignore
+.DS_Store
+.vscode/
+.idea/

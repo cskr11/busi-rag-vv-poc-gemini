@@ -1,0 +1,19 @@
+# Core LangChain Libraries
+langchain
+langchain-core           # <-- Essential for modern LCEL chains
+langchain-community
+
+# Gemini Integration
+langchain-google-genai
+
+# Specialized component for splitting text
+langchain-text-splitters
+
+# OpenSearch Integration
+opensearch-py
+
+# Utility
+jq
+python-dotenv
+protobuf
+# tiktoken

@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "title": "Project Alpha Launch",
+    "content": "Project Alpha successfully launched on Nov 1st. Key features include...",
+    "category": "launches"
+  },
+  {
+    "id": 2,
+    "title": "Q4 Financials",
+    "content": "Revenue exceeded expectations by 15% due to Project Alpha's performance...",
+    "category": "finance"
+  }
+]
