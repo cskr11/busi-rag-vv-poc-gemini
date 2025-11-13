@@ -22,7 +22,6 @@ def run_rag_pipeline(query: str):
     print(f"-> Initializing RAG pipeline...")
 
     # 1. Initialize Embeddings (Required to interact with the indexed vectors)
-    # The embedding function must match the one used during ingestion.
     embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
 
     # 2. Create the Vector Store Client (Retrieval Setup)
@@ -30,7 +29,9 @@ def run_rag_pipeline(query: str):
         vector_store = OpenSearchVectorSearch(
             index_name=INDEX_NAME,
             embedding_function=embeddings,
-            opensearch_url=OPENSEARCH_URL
+            opensearch_url=OPENSEARCH_URL,
+            # MODIFICATION: Added client_kwargs for consistent connection
+            client_kwargs={'verify_certs': False, 'ssl_show_warn': False}
         )
         print(f"   - Connected to OpenSearch index: {INDEX_NAME}")
     except Exception as e:
@@ -43,8 +44,9 @@ def run_rag_pipeline(query: str):
 
     # 4. Define the RAG Prompt Template
     template = """
-    You are an expert assistant. Use only the following context to answer the user's question.
+    You are an expert risk analyst. Use only the following context to answer the user's question.
     If you don't know the answer based on the context, state that you don't have enough information.
+    Be concise and professional.
 
     Context:
     {context}
@@ -57,21 +59,17 @@ def run_rag_pipeline(query: str):
             ("human", "{question}")
         ]
     )
-    print("- Defined RAG Prompt Template.")
+    print("   - Defined RAG Prompt Template.")
 
-    # 5. Create the RAG Chain using LCEL (This replaces RetrievalQA)
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    # 5. Create the RAG Chain using LCEL
+    # We will retrieve 5 documents to get a good amount of context
+    retriever = vector_store.as_retriever(search_kwargs={"k": 5})
 
     # The LCEL RAG chain defines the sequence of operations:
     rag_chain = (
-        # 1. RunnablePassthrough() handles the question input.
-        # It assigns two keys: 'context' (retrieved docs formatted) and 'question' (the original query).
         {"context": retriever | RunnableLambda(format_docs), "question": RunnablePassthrough()}
-        # 2. Pass the dictionary to the prompt template
         | custom_prompt
-        # 3. Invoke the LLM
         | llm
-        # 4. Parse the final output to a string
         | StrOutputParser()
     )
 
@@ -82,21 +80,43 @@ def run_rag_pipeline(query: str):
     final_answer = rag_chain.invoke(query)
 
     # Separately retrieve the source docs to display them
-    source_docs = retriever.invoke(query)
+    # Use a try-except block in case the retriever finds no documents
+    try:
+        source_docs = retriever.invoke(query)
+    except Exception as e:
+        print(f"   - Error retrieving source documents: {e}")
+        source_docs = []
 
     # 7. Output Results
     print("\n[AI Generated Answer]")
     print(final_answer)
     print("\n[Source Documents (Context Used)]")
+
+    if not source_docs:
+        print("   - No source documents were retrieved.")
+
     for i, doc in enumerate(source_docs):
-        print(f"--- Source {i+1} ---")
-        # Ensure the content snippet is safe to print
+        print(f"--- Source {i+1} (Type: {doc.metadata.get('doc_type', 'N/A')}) ---")
         print(f"Content Snippet: {doc.page_content[:150]}...")
         print(f"Metadata: {doc.metadata}")
 
     return final_answer
 
+# --- MAIN EXECUTION (MODIFIED) ---
+
 if __name__ == "__main__":
     # Ensure you run ingest.py successfully before running this.
-    test_query = "What is the typical height required for fall protection and what is OpenSearch used for?"
-    run_rag_pipeline(test_query)
+
+    # MODIFICATION: Replaced the old query with relevant queries for your data.
+
+    # Query 1: A broad, summary-level question
+    print("--- Running Broad Query ---")
+    test_query_1 = "What is the overall risk score for the business at 3039 East Cornwallis RD?"
+    run_rag_pipeline(test_query_1)
+
+    print("\n" + "="*50 + "\n")
+
+    # Query 2: A specific, detailed question
+    print("--- Running Specific Query ---")
+    test_query_2 = "What are the high-priority legal or financial risks for this company?"
+    run_rag_pipeline(test_query_2)

@@ -4,24 +4,22 @@ import json
 import os
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import OpenSearchVectorSearch
-from opensearchpy import OpenSearch, exceptions as opensearch_exceptions # Import OpenSearch client for deletion logic
+from opensearchpy import OpenSearch, exceptions as opensearch_exceptions
 
-# CORRECTED IMPORTS
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document
+# Document is used to structure the data for ingestion
+from langchain_core.documents import Document 
 
-from config import OPENSEARCH_URL, INDEX_NAME, EMBEDDING_MODEL, DATA_FILE
+from config import OPENSEARCH_URL, INDEX_NAME, EMBEDDING_MODEL
 
-# --- Helper Functions ---
+# --- Helper Functions (Unchanged) ---
 
 def get_opensearch_client():
     """Initializes and returns the raw OpenSearch client."""
     return OpenSearch(
         hosts=[OPENSEARCH_URL],
-        use_ssl=False,
+        use_ssl=False, 
         verify_certs=False,
-        # Ensure client is ready to make requests
-        request_timeout=30
+        request_timeout=30 
     )
 
 def delete_existing_index(client, index_name):
@@ -36,7 +34,7 @@ def delete_existing_index(client, index_name):
         print(f"-> Index {index_name} not found during deletion (expected).")
     except Exception as e:
         print(f"Error during index deletion: {e}")
-
+        
 def index_exists(client, index_name):
     """Checks if the OpenSearch index exists."""
     try:
@@ -45,25 +43,78 @@ def index_exists(client, index_name):
         print(f"Error checking index existence: {e}")
         return False
 
-# --- Core Ingestion Logic ---
+# --- JSON Processing Function (Unchanged) ---
 
-def create_sample_data(file_path):
-    """Creates a dummy JSON file for demonstration purposes."""
-    print(f"-> Creating sample data file: {file_path}")
-    sample_data = [
-        {"content": "The standard height for fall protection in construction is typically 6 feet (1.8 meters) above a lower level, but this can vary by industry and regulation."},
-        {"content": "OpenSearch is an open-source search and analytics suite, forked from Elasticsearch and Kibana. It supports vector search through its k-NN plugin for high-performance retrieval."},
-        {"content": "LangChain is a framework for developing applications powered by language models. It provides abstractions for components like vector stores, retrievers, and LLMs, simplifying RAG setup."},
-        {"content": "Google's embedding models, like text-embedding-004, are highly effective for capturing the semantic meaning of text and powering similarity search in RAG pipelines."}
-    ]
-    with open(file_path, 'w') as f:
-        json.dump(sample_data, f, indent=4)
-    print("-> Sample data created successfully.")
-
-
-def ingest_data_to_opensearch(docs_path, force_reindex=False):
+def process_risk_data_to_documents(data):
     """
-    Handles data ingestion, with an option to force a full reindex.
+    Transforms the complex risk JSON into a list of Document objects
+    (one for each risk finding and one for the summary).
+    """
+    print("   - Processing complex JSON into Document objects...")
+    document_list = []
+    
+    # Assumes the structure from your file: payload -> documents (list)
+    for risk_profile in data.get('payload', {}).get('documents', []):
+        doc_id = risk_profile.get('documentId')
+        source_doc = risk_profile.get('sourceDocument', {})
+        identity_doc = source_doc.get('identitySourceDocument', {})
+        
+        # Get base identity info
+        business_id = doc_id
+        business_address = identity_doc.get('addressIdentifiers', [{}])[0].get('identifier', {}).get('data', {}).get('line1', 'Unknown Address')
+
+        # STRUCTURE 1: Create a Document for each Risk Finding
+        risk_findings = source_doc.get('riskFindings', [])
+        for finding in risk_findings:
+            # Create the text to be vectorized (the 'page_content')
+            content_text = (
+                f"Risk Finding: {finding.get('findingText', 'N/A')}\n"
+                f"Category: {finding.get('riskCategory', 'N/A')} (Subcategory: {finding.get('riskSubcategory', 'N/A')})\n"
+                f"Priority: {finding.get('priority', 'N/A')}\n"
+                f"Context: {finding.get('findingContext', 'N/A')}\n"
+                f"Source: {finding.get('source', 'N/A')}"
+            )
+            
+            # Create the metadata for filtering
+            metadata = {
+                "business_id": business_id,
+                "business_address": business_address,
+                "doc_type": "RiskFinding",
+                "risk_category": finding.get('riskCategory'),
+                "risk_subcategory": finding.get('riskSubcategory'),
+                "priority": finding.get('priority'),
+                "source": finding.get('source')
+            }
+            
+            document_list.append(Document(page_content=content_text, metadata=metadata))
+
+        # STRUCTURE 2: Create one Document for the Profile Summary
+        profile_score = source_doc.get('profileScoreDetail', {}).get('profileScore', 'N/A')
+        
+        summary_content = (
+            f"Overall risk profile summary for business at {business_address}.\n"
+            f"Business ID: {business_id}\n"
+            f"Overall Profile Score: {profile_score}\n"
+            f"Total Detailed Risk Findings: {len(risk_findings)}"
+        )
+        
+        summary_metadata = {
+            "business_id": business_id,
+            "business_address": business_address,
+            "doc_type": "ProfileSummary",
+            "profile_score": profile_score,
+            "total_findings": len(risk_findings)
+        }
+        document_list.append(Document(page_content=summary_content, metadata=summary_metadata))
+        
+    print(f"   - Generated {len(document_list)} Document objects.")
+    return document_list
+
+# --- Core Ingestion Logic (Modified) ---
+
+def ingest_data_to_opensearch(file_path, force_reindex=False):
+    """
+    Handles data ingestion from the complex JSON file.
     """
     os_client = get_opensearch_client()
 
@@ -77,49 +128,52 @@ def ingest_data_to_opensearch(docs_path, force_reindex=False):
 
     print(f"\n-> Starting data ingestion process into index: {INDEX_NAME}")
 
-    # 1. Load Data and Prepare Documents
+    # 1. Load Data and Transform into Documents
     try:
-        with open(docs_path, 'r') as f:
-            data = json.load(f)
-
-        documents = [Document(page_content=item["content"], metadata={"source": docs_path, "doc_id": i}) for i, item in enumerate(data)]
-
+        # 
+        # --- THIS IS THE FIX ---
+        # Specify UTF-8 encoding to handle special characters
+        with open(file_path, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+        # --- END OF FIX ---
+        # 
+        
+        # Use our new processing function
+        documents_to_ingest = process_risk_data_to_documents(raw_data)
+        
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Error loading data from {docs_path}: {e}")
+        print(f"Error: File not found or is not valid JSON at {file_path}: {e}")
+        return
+    except UnicodeDecodeError as e:
+        print(f"Error: Encoding issue with file {file_path}. {e}")
+        print("   - Please ensure the file is saved as UTF-8.")
+        return
+    except Exception as e:
+        print(f"An error occurred during data processing: {e}")
         return
 
-    # 2. Split Documents (Chunking)
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len
-    )
-    docs = text_splitter.split_documents(documents)
-    print(f"   - Split {len(documents)} source docs into {len(docs)} chunks.")
-
-    # 3. Initialize Embeddings (Creating the Vector Embeddings)
+    # 2. Initialize Embeddings
     embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
     print(f"   - Initialized Google Embeddings model: {EMBEDDING_MODEL}")
 
-    # 4. Create OpenSearch Vector Store and Index (Storing Embeddings)
+    # 3. Create OpenSearch Vector Store and Index
     try:
-        # from_documents handles embedding the chunks and uploading them to OpenSearch
         OpenSearchVectorSearch.from_documents(
-            docs,
+            documents_to_ingest,
             embeddings,
             opensearch_url=OPENSEARCH_URL,
             index_name=INDEX_NAME,
-            client_kwargs={'verify_certs': False, 'ssl_show_warn': False}
+            client_kwargs={'verify_certs': False, 'ssl_show_warn': False} 
         )
-        print(f"-> Successfully indexed {len(docs)} chunks into OpenSearch index: {INDEX_NAME}")
+        print(f"-> Successfully indexed {len(documents_to_ingest)} documents into OpenSearch index: {INDEX_NAME}")
     except Exception as e:
         print(f"Error connecting to or indexing in OpenSearch at {OPENSEARCH_URL}. Is OpenSearch running? Error: {e}")
 
+# --- MAIN EXECUTION (Unchanged) ---
+
 if __name__ == "__main__":
-    create_sample_data(DATA_FILE)
-
-    # To run a full reindex (delete and load):
-    # ingest_data_to_opensearch(DATA_FILE, force_reindex=True)
-
-    # To load only if the index doesn't exist (default behavior):
-    ingest_data_to_opensearch(DATA_FILE, force_reindex=False)
+    # Define the path to your complex JSON file
+    COMPLEX_JSON_FILE = "data/knowledge-base.json"
+    
+    # Run the ingestion with force_reindex=True to ensure it loads fresh data
+    ingest_data_to_opensearch(COMPLEX_JSON_FILE, force_reindex=True)
