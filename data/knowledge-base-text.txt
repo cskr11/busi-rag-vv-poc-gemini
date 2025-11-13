@@ -1,0 +1,75 @@
+Key Patterns Identified in the JSON
+
+The relevant data can be logically grouped into three main sections:
+
+1️⃣ Identity Data (The Subject)
+
+Address:
+Found under identitySourceDocument.addressIdentifiers
+Example:
+"3039 East Cornwallis RD, Building 002, Durham, United States OF America, 27709"
+
+Unique ID:
+The documentId (e.g., a390e4c9-514f-4dc9-8297-707bfbcf8ba8) serves as a unique key for the entire risk profile.
+
+2️⃣ Overall Risk Summary
+
+Profile Score:
+An aggregated score (e.g., 0.5) located in profileScoreDetail.
+
+3️⃣ Detailed Risk Findings (The Knowledge Base)
+
+The riskFindings array contains 104 structured risk events, each describing a unique risk item.
+These findings are the most valuable for your RAG pipeline.
+
+Each finding includes:
+
+Field	Description
+findingText	Core description of the risk (most important content)
+riskCategory / riskSubcategory	Type of risk (e.g., Financial, Legal)
+priority	Severity level of the finding
+findingContext	Additional evidentiary details
+🛠️ Constructing Relationships for Vector Embeddings
+
+To maximize retrieval accuracy, create separate, focused text chunks for each risk finding and one overall profile summary — all linked back to the business identity.
+
+1️⃣ Primary Embedding Structure: Detailed Risk Finding (Most Important)
+
+This is the core structure for your RAG pipeline.
+Each of the 104 entries in riskFindings should become one individual vector chunk.
+
+Action:
+Iterate through each finding and generate one chunk per entry.
+
+Vector DB Field	Data Source (Concatenated Text for Vectorization)	RAG Query Example
+Content (Vectorized)	findingText + findingContext + "The source is: " + source	“What are the high-priority regulatory risks for the company?”
+Metadata (Filtering)	business_id: documentId	“Show me all risks for this ID.”
+Metadata	risk_category: riskCategory	“Filter by Financial.”
+Metadata	risk_priority: priority	“Filter by Priority 1.”
+Metadata	business_address: Address Line 1	Links content to physical location.
+
+✅ Example Final Text Chunk:
+
+"High severity, legal non-compliance risk: The company was cited for environmental violations in Q2 2025. 
+Finding Context: Violation of Clean Water Act, fines pending. 
+The source is: EPA Regulatory Filings."
+
+2️⃣ Secondary Embedding Structure: Profile Summary
+
+This captures high-level insights about the entire business —
+useful for summary or overview-type RAG queries.
+
+Action:
+Create one chunk per document summarizing the profile score and main risk categories.
+
+Vector DB Field	Data Source (Concatenated Text for Vectorization)	RAG Query Example
+Content (Vectorized)	"The business profile for [Address] has an overall risk score of [profileScore]. The top three risk areas are [Category 1], [Category 2], and [Category 3]."	“What is the risk score for the company at 3039 E Cornwallis RD?”
+Metadata	profile_score: profileScore	Numerical filtering
+Metadata	business_id: documentId	Links to detailed findings
+✅ Summary
+
+By using both structures, your vector store becomes robust and query-ready:
+
+Structure 1: Deep-dive, evidential RAG for risk analysis
+
+Structure 2: High-level, contextual RAG for summary queries
