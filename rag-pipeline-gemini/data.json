@@ -1,0 +1,14 @@
+[
+    {
+        "content": "The standard height for fall protection in construction is typically 6 feet (1.8 meters) above a lower level, but this can vary by industry and regulation."
+    },
+    {
+        "content": "OpenSearch is an open-source search and analytics suite, forked from Elasticsearch and Kibana. It supports vector search through its k-NN plugin for high-performance retrieval."
+    },
+    {
+        "content": "LangChain is a framework for developing applications powered by language models. It provides abstractions for components like vector stores, retrievers, and LLMs, simplifying RAG setup."
+    },
+    {
+        "content": "Google's embedding models, like text-embedding-004, are highly effective for capturing the semantic meaning of text and powering similarity search in RAG pipelines."
+    }
+]

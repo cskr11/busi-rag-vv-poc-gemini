@@ -1,20 +1,18 @@
-# LangChain Core and Integrations
+# Core LangChain package and its dependencies (for chains, LCEL, etc.)
+langchain
 langchain-core
+
+# Integration for Google LLM (Gemini) and Google Embeddings
 langchain-google-genai
+
+# Integration for OpenSearch VectorStore
 langchain-community
+
+# Dedicated package for Text Splitters (e.g., RecursiveCharacterTextSplitter)
 langchain-text-splitters
-python-dotenv
 
-# Vector Store (Chroma)
-chromadb
-
-# Embeddings (Local HuggingFace)
-sentence-transformers
-
-# Data Source (OpenSearch)
+# Native Python client for interacting with OpenSearch (used for index deletion/existence checks)
 opensearch-py
 
-# Dependency Fixes (Ensuring compatibility for Google GenAI)
-# The google-api-core package is often needed explicitly for environment robustness
-google-api-core
-protobuf>=6.31.1
+# Optional: If you use the TikToken encoder for token-based splitting
+# tiktoken
