@@ -1,50 +1,26 @@
 import os
 import sys
-import time  # <-- Import time for a small delay
-from pydantic import SecretStr
-from dotenv import load_dotenv
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import time
 from langchain_community.vectorstores import OpenSearchVectorSearch
-from typing import Any, Dict, List # <-- Added List for typing
-from langchain_core.documents import Document # <-- Added Document for typing
-
-# Load environment variables (for GOOGLE_API_KEY)
-load_dotenv()
+from typing import List
+from langchain_core.documents import Document
+# Imports required for standalone execution block:
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from dotenv import load_dotenv
 
 # --- Configuration (Centralized or using Environment Variables) ---
 OPENSEARCH_URL = "http://localhost:9200"
 OPENSEARCH_VECTOR_INDEX = "weather-vector-store"
-EMBEDDING_MODEL_NAME = "models/text-embedding-004"  # Use the correct model name
-EMBEDDING_DIMENSION = 768
+# NOTE: MiniLM-L6-v2 dimension is 384
+EMBEDDING_DIMENSION = 384
 VECTOR_FIELD = "vector_field"
 
 
-def get_opensearch_vector_store():
-    """Initializes the embedding model and OpenSearch Vector Store connection."""
-
-    # --- START OF FIX ---
-    # 1. Retrieve the API Key from the environment
-    api_key_str = os.getenv("GOOGLE_API_KEY")
-
-    # 2. Check if the key was loaded successfully
-    if not api_key_str:
-        print(
-            "❌ ERROR: GOOGLE_API_KEY environment variable not found. Check your .env file."
-        )
-        sys.exit(1)
-
-    # 3. Convert the string to a SecretStr for Pydantic/LangChain
-    api_key = SecretStr(api_key_str)
-    # --- END OF FIX ---
-
-    print("\nInitializing Google Generative AI Embeddings...")
-
-    # 4. Pass the key EXPLICITLY and set transport="rest"
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model=EMBEDDING_MODEL_NAME,
-        google_api_key=api_key,
-        transport="rest"  # <-- THIS IS THE CRITICAL FIX
-    )
+def get_opensearch_vector_store(embeddings_client) -> OpenSearchVectorSearch:
+    """
+    Initializes the OpenSearch Vector Store connection using an
+    already-initialized embeddings client.
+    """
 
     print(
         f"Connecting to OpenSearch at {OPENSEARCH_URL} and index '{OPENSEARCH_VECTOR_INDEX}'..."
@@ -53,7 +29,8 @@ def get_opensearch_vector_store():
     # Initialize the vector store connection
     vector_store = OpenSearchVectorSearch(
         index_name=OPENSEARCH_VECTOR_INDEX,
-        embedding_function=embeddings,
+        # CRITICAL: Use the client passed into the function
+        embedding_function=embeddings_client,
         opensearch_url=OPENSEARCH_URL,
         vector_field=VECTOR_FIELD,
         text_field="text",
@@ -66,30 +43,40 @@ def get_opensearch_vector_store():
     )
     return vector_store
 
-
 def index_documents(vector_store: OpenSearchVectorSearch, documents: List[Document]):
     """Adds a list of LangChain Documents (chunks) to the OpenSearch index."""
     print("Indexing chunks in batch...")
+
+    # --- CRITICAL SANITY CHECK FOR 'DICT' OBJECT ERROR ---
+    safe_documents = []
+    for i, doc in enumerate(documents):
+        # The logic to prevent the 'dict' object error
+        if not isinstance(doc, Document) or not isinstance(doc.page_content, str) or not doc.page_content.strip():
+            print(f"⚠️ Document skipped at index {i}. Invalid type or empty content.")
+            continue
+
+        safe_documents.append(doc)
+
+    if not safe_documents:
+        print("❌ ERROR: No safe documents to index. Check data_prep.py.")
+        return []
+
     try:
-        ids = vector_store.add_documents(documents)
+        ids = vector_store.add_documents(safe_documents)
         print(
-            f"Batch indexing complete. Total documents/chunks indexed: {len(ids)}"
+            f"Batch indexing complete. Total documents/chunks indexed: {len(ids)} (from {len(documents)} originals)"
         )
         return ids
     except Exception as e:
         print(f"❌ ERROR during indexing: {e}")
-        # This is where the 'DESCRIPTOR' error would have happened, but now it's auth.
-        # This will now be fixed.
         raise e
 
 
-# delete index function
 def delete_index(vector_store: OpenSearchVectorSearch, index_name: str):
     """Deletes the specified OpenSearch index if it exists."""
     print(f"Attempting to delete index '{index_name}'...")
     try:
         # Use the LangChain wrapper's delete_index method
-        # This safely handles "not found" errors
         vector_store.delete_index(index_name=index_name)
         print(
             f"Index '{index_name}' deletion acknowledged or index did not exist."
@@ -98,40 +85,45 @@ def delete_index(vector_store: OpenSearchVectorSearch, index_name: str):
         print(f"Error during index deletion: {e}")
 
 
-# --- CORRECTED EXECUTION BLOCK ---
-# This block will run when you execute `python vector_store.py`
+## 🚀 MAIN METHOD FOR STANDALONE EXECUTION
 if __name__ == "__main__":
-    
-    # We must import data_prep here, inside the main block
-    # (This will still fail if data_prep.py is not in the same folder)
+
+    # 1. Ensure required modules are available
     try:
-        from data_prep import get_raw_weather_data, create_and_chunk_documents
+        from data_prep import create_and_chunk_documents
+        load_dotenv() # Load env vars for OpenSearch Auth (if needed)
+
     except ModuleNotFoundError:
-        print("❌ ERROR: `data_prep.py` not found in the current directory.")
-        print("Please ensure all .py files are in the same folder.")
+        print("❌ ERROR: Required module 'data_prep.py' not found. Ensure all files are in the same directory.")
         sys.exit(1)
 
-    # 1. Prepare data
-    raw_data = get_raw_weather_data()
-    chunks = create_and_chunk_documents()
+    # 2. Initialize Embeddings Client (HuggingFace)
+    print("\n--- Initializing HuggingFace Embeddings for Standalone Run ---")
+    standalone_embeddings_client = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2",
+        model_kwargs={'device': 'cpu'}
+    )
 
-    # 2. Get the vector store connection
-    print("\n--- Connecting to Vector Store ---")
-    vector_store = get_opensearch_vector_store()
-    
-    # --- REINDEXING LOGIC ---
+    # 3. Prepare data and connect
+    print("\n--- Preparing Data and Connecting to Vector Store ---")
+    chunks = create_and_chunk_documents()
+    vector_store = get_opensearch_vector_store(standalone_embeddings_client)
+
+    # --- Full Reindexing Process ---
     print("\n--- Starting Full Reindexing Process ---")
 
-    # 3. Delete the existing index
-    delete_index(vector_store, OPENSEARCH_VECTOR_INDEX)
+    try:
+        # 4. Delete the existing index
+        delete_index(vector_store, OPENSEARCH_VECTOR_INDEX)
 
-    # 4. Wait for 2 seconds (good practice for index deletion to settle)
-    print("Waiting 2 seconds for index to delete...")
-    time.sleep(2)
+        # 5. Wait for 2 seconds
+        print("Waiting 2 seconds for index to delete...")
+        time.sleep(2)
 
-    # 5. Recreate and index documents
-    # The OpenSearchVectorSearch object will automatically
-    # create the index again when 'add_documents' is called.
-    index_documents(vector_store, chunks)
+        # 6. Recreate and index documents
+        index_documents(vector_store, chunks)
 
-    print("--- Full Reindexing Complete ---")
+        print("--- Full Reindexing Complete ---")
+    except Exception as e:
+        print(f"\n❌ CRITICAL INDEXING ERROR: {e}")
+        print("Ensure OpenSearch is running and accessible.")

@@ -1,19 +1,20 @@
-# Core LangChain Libraries
-langchain
-langchain-core           # <-- Essential for modern LCEL chains
-langchain-community
-
-# Gemini Integration
+# LangChain Core and Integrations
+langchain-core
 langchain-google-genai
-
-# Specialized component for splitting text
+langchain-community
 langchain-text-splitters
+python-dotenv
 
-# OpenSearch Integration
+# Vector Store (Chroma)
+chromadb
+
+# Embeddings (Local HuggingFace)
+sentence-transformers
+
+# Data Source (OpenSearch)
 opensearch-py
 
-# Utility
-jq
-python-dotenv
-protobuf
-# tiktoken
+# Dependency Fixes (Ensuring compatibility for Google GenAI)
+# The google-api-core package is often needed explicitly for environment robustness
+google-api-core
+protobuf>=6.31.1

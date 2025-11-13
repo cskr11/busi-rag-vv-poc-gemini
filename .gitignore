@@ -10,9 +10,11 @@ __pycache__/
 # Environment (ignore the whole directory)
 .venv/
 .rag_env/
+.langchain_venv/
 env/
 venv/
 rag_env/
+langchain_venv/
 ENV/
 env.bak/
 venv.bak/
@@ -26,3 +28,4 @@ rag_data/
 .DS_Store
 .vscode/
 .idea/
+chroma_db/
