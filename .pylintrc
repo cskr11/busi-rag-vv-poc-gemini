@@ -1,0 +1,5 @@
+[MASTER]
+# Assuming 'config' is in the root directory relative to the file Pylint is running on
+init-hook='import sys; sys.path.append("./src")' 
+# OR, if running from a different location, specify the path to 'src'
+# init-hook='import sys; sys.path.append("/path/to/your/project/src")'

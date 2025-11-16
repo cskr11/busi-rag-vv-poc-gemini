@@ -16,3 +16,5 @@ opensearch-py
 
 # Optional: If you use the TikToken encoder for token-based splitting
 # tiktoken
+fastapi
+uvicorn

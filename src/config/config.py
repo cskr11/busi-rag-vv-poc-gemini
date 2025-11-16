@@ -7,7 +7,7 @@ dotenv.load_dotenv()
 
 # --- OpenSearch Configuration ---
 OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
-INDEX_NAME = "rag_documents_vectorstore"
+INDEX_NAME = os.getenv("OPENSEARCH_INDEX", "rag_documents_vectorstore_myntra")
 
 # --- Model Configuration ---
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-004")
