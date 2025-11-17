@@ -5,19 +5,31 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from opensearchpy import OpenSearch, exceptions as opensearch_exceptions
 from typing import List, Dict, Any
+from dotenv import load_dotenv
 
 # Ensure the parent directory (src) is in the path for sibling imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Configuration and essential functions (assuming config.py is in src/config)
-from config.config import INDEX_NAME, EMBEDDING_MODEL, LLM_MODEL 
-from ingestion.ingest import get_opensearch_client, VECTOR_FIELD_NAME 
+# Import configurations
+from config.config import LLM_MODEL, OPENSEARCH_URL, INDEX_NAME, EMBEDDING_MODEL, VECTOR_FIELD_NAME, K_VALUE
 
-K_VALUE = 5 
+# Load environment variables if needed
+load_dotenv() 
 
-def improved_hybrid_retriever(query: str, client: OpenSearch, embeddings: GoogleGenerativeAIEmbeddings, k: int = K_VALUE) -> List[Document]:
+# --- Helper Functions (From ingest.py) ---
+def get_opensearch_client():
+    """Initializes and returns the raw OpenSearch client."""
+    return OpenSearch(
+        hosts=[OPENSEARCH_URL],
+        use_ssl=False,
+        verify_certs=False,
+        request_timeout=30
+    )
+
+
+def simple_hybrid_retriever(query: str, client: OpenSearch, embeddings: GoogleGenerativeAIEmbeddings, k: int = K_VALUE) -> List[Document]:
     
-    print("  - Starting improved hybrid search...")
+    print("  - Starting simple hybrid search (KNN + Full Text Match)...")
     
     try:
         # 1. Generate Query Vector (Semantic Search Input)
@@ -26,54 +38,13 @@ def improved_hybrid_retriever(query: str, client: OpenSearch, embeddings: Google
         print(f"Error generating embedding vector: {e}")
         return []
 
-    # 2. Structured Filter Logic 
-    lucene_filters = []
-    lower_query = query.lower()
-
-    # Query: Companies that are not having any risks (filters by total_findings: 0)
-    if "no risk" in lower_query or "no finding" in lower_query or "zero risk" in lower_query:
-        # Targeting the explicit 'total_findings' integer field
-        lucene_filters.append({"term": {"metadata.doc_type": "ProfileSummary"}})
-        lucene_filters.append({"term": {"metadata.total_findings": 0}}) 
-
-    # Query: High priority risk (filters by Priority >= 2)
-    elif "high priority" in lower_query or "priority 2" in lower_query or "critical risk" in lower_query:
-         # Targeting the explicit 'priority' integer field
-         lucene_filters.append({"range": {"metadata.priority": {"gte": 2, "lte": 4}}}) 
-         lucene_filters.append({"term": {"metadata.doc_type": "RiskFinding"}})
-
-    # Query: Drill downs for specific categories/names
-    elif "h1b" in lower_query or "visa" in lower_query or "espionage" in lower_query:
-        # Using the cleaned subcategory name from the corrected ingestion script
-        lucene_filters.append({"term": {"metadata.risk_subcategory": "H1B visa and green card sponsorship"}})
-        lucene_filters.append({"term": {"metadata.doc_type": "RiskFinding"}})
-
-    elif "russian" in lower_query or "adversarial supply chain" in lower_query:
-        # Targeting the specific subcategory
-        lucene_filters.append({"term": {"metadata.risk_subcategory": "ADVERSARIAL SUPPLY CHAIN: Vends to an adversarial government"}})
-        lucene_filters.append({"term": {"metadata.doc_type": "RiskFinding"}})
-        
-    elif "hong kong" in lower_query or "foci" in lower_query:
-        # Targeting the specific category
-        lucene_filters.append({"term": {"metadata.risk_category": "Foreign Ownership, Control, or Influence (FOCI)"}})
-        lucene_filters.append({"term": {"metadata.doc_type": "RiskFinding"}})
-        
-    # Default filters: if no special filters, search all risk and summary docs
-    if not lucene_filters:
-        print("  - Applying default filter for all Risk Findings and Summaries.")
-        lucene_filters.append(
-            {"bool": {"should": [
-                {"term": {"metadata.doc_type": "RiskFinding"}},
-                {"term": {"metadata.doc_type": "ProfileSummary"}}
-            ], "minimum_should_match": 1}}
-        )
-
-    # 3. Build the Hybrid Query Body
+    # 2. Build the Hybrid Query Body 
     query_body = {
+        "size": k,
         "query": {
             "bool": {
-                "filter": lucene_filters, 
-                "must": [
+                # CRITICAL: Using 'should' to allow either KNN or Text Search to succeed
+                "should": [
                     {
                         "knn": {
                             VECTOR_FIELD_NAME: {
@@ -82,48 +53,60 @@ def improved_hybrid_retriever(query: str, client: OpenSearch, embeddings: Google
                             }
                         }
                     },
-                    # Add a strong Lucene search to catch keyword matches where vector search might fail
+                    # Add a strong Lucene search to catch keyword matches
                     {
                         "query_string": {
                             "query": query,
-                            "fields": ["page_content", "metadata.company_name", "metadata.risk_category", "metadata.risk_subcategory"],
-                            "default_operator": "OR" # Changed to OR for broader match
+                            # Added 'text' as a fallback field, and boosted important metadata fields
+                            "fields": ["page_content^2", "text^2", "metadata.company_name^3", "metadata.risk_subcategory^2"],
+                            "default_operator": "OR" 
                         }
                     }
-                ]
+                ],
+                "minimum_should_match": 1 
             }
         },
-        "_source": ["page_content", "metadata"]
+        # Requesting both content keys just in case
+        "_source": ["page_content", "text", "metadata"] 
     }
     
-    # 4. Execute the Search and Format Results
+    # 3. Execute the Search and Format Results
     try:
         response = client.search(index=INDEX_NAME, body=query_body)
         
         docs = []
         for hit in response['hits']['hits']:
-            content = hit['_source']['page_content']
-            metadata = hit['_source']['metadata']
+            source = hit['_source']
+            
+            # --- FIX APPLIED HERE: Using .get() and checking for 'text' ---
+            # Try to get 'page_content' (expected) or 'text' (common fallback in LangChain)
+            content = source.get('page_content')
+            if content is None:
+                content = source.get('text') 
+
+            if content is None:
+                 # Skip corrupted/empty documents
+                 continue 
+
+            metadata = source.get('metadata', {})
             docs.append(Document(page_content=content, metadata=metadata))
         
-        print(f"  - Retrieved {len(docs)} documents using Hybrid Search (Applied filters: {len(lucene_filters)}).")
+        print(f"  - Retrieved {len(docs)} documents using Simple Hybrid Search.")
         return docs
         
     except opensearch_exceptions.NotFoundError:
-        print(f"  - Index {INDEX_NAME} not found during hybrid search. Did you run ingest.py?")
+        print(f"  - Index {INDEX_NAME} not found during hybrid search. Did you run ingest.py?")
         return []
     except Exception as e:
-        print(f"  - Error during hybrid OpenSearch query: {e}")
-        # Print the problematic query body for external debugging
-        print(f"    - Failing Query Body: {query_body}")
+        print(f"  - Error during simple OpenSearch query: {e}")
         return []
 
-# --- RAG SIMULATION LOGIC (No changes needed here) ---
+# --- RAG SIMULATION LOGIC (Unchanged) ---
 
 def run_rag_query(query: str, client: OpenSearch, embeddings: GoogleGenerativeAIEmbeddings):
     
-    # 1. Retrieval
-    retrieved_docs = improved_hybrid_retriever(query, client, embeddings) 
+    # 1. Retrieval: Using the simplified retriever
+    retrieved_docs = simple_hybrid_retriever(query, client, embeddings) 
     
     if not retrieved_docs:
         print("\n[AI ASSISTANT RESPONSE]\nNo relevant context was retrieved from OpenSearch.")
@@ -132,16 +115,16 @@ def run_rag_query(query: str, client: OpenSearch, embeddings: GoogleGenerativeAI
     # 2. Context Stuffing
     context_text = "\n---\n".join([doc.page_content for doc in retrieved_docs])
     
-    # 3. Generation (LCEL style prompt creation)
+    # 3. Generation 
     llm = ChatGoogleGenerativeAI(model=LLM_MODEL, temperature=0.0)
 
     SYSTEM_TEMPLATE = """
     You are a highly analytical risk assessment AI. Your role is to answer the user's question 
-    **based ONLY on the provided CONTEXT**. Do not use external knowledge.
+    **based ONLY on the provided CONTEXT**. 
     
-    - For high-priority risks, mention the priority level (e.g., Priority 2).
+    - Summarize the business name, the number of total findings (if available), and the highest priority risk found.
     - If a company has 'no detailed risk findings', explicitly state this.
-    - Answer concisely and professionally.
+    - Be professional, concise, and factual.
 
     CONTEXT:
     ---
@@ -167,32 +150,32 @@ def run_rag_query(query: str, client: OpenSearch, embeddings: GoogleGenerativeAI
     print("RELEVANT CONTEXT CHUNKS RETRIEVED:")
     for i, doc in enumerate(retrieved_docs):
         company_name = doc.metadata.get('company_name', 'N/A')
-        priority = doc.metadata.get('priority', 'N/A')
         doc_type = doc.metadata.get('doc_type', 'N/A')
-        print(f"[{i+1}] {company_name} | Priority: {priority} | Doc Type: {doc_type}")
-        print(f"     Snippet: {doc.page_content[:100]}...")
+        risk_sub = doc.metadata.get('risk_subcategory', 'N/A')
+        print(f"[{i+1}] **{company_name}** ({doc_type}) | Subcategory: {risk_sub}")
+        print(f"      Snippet: {doc.page_content[:150]}...")
 
 
 # --- MAIN EXECUTION ---
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
     
-    # Initialize shared components once
     os_client = get_opensearch_client()
-    embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
+    embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL, request_options={"timeout": 60})
     
-    # The queries should now work better due to: 
-    # 1. Corrected filtering logic using ranges/specific terms.
-    # 2. The addition of a Lucene query (`query_string`) in the 'must' clause to boost keyword matches.
-    test_queries = [
-        "What are the risks associated with a company?", 
-        "Which companies are having the high priority risk?", 
-        "The companies that are not having any risks.", 
-        "Drill down to the risk involving H1B visa sponsorship.", 
-        "Find the relevant docs for the risk 'Adversarial Supply Chain' for MYNTRA.",
+    print("="*50)
+    print(f"STARTING LIVE QUERY SIMULATION (K=5, Index='{INDEX_NAME}')")
+    print("="*50)
+    
+    # Simple queries that rely on KNN and fuzzy text matching:
+    simple_test_queries = [
+        "Tell me about the risks for IBM.",
+        "What risk does Myntra have regarding Hong Kong business?",
+        "Are there any risks related to visas for International Business Machines?",
+        "What is the overall profile score for MYNTRA JABONG INDIA PRIVATE LIMITED?",
+        "Is there a high priority risk for International Business Machines?"
     ]
     
-    for q in test_queries:
+    for q in simple_test_queries:
         run_rag_query(q, os_client, embeddings)
+        print("\n" + "-"*50 + "\n")

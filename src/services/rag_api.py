@@ -19,9 +19,13 @@ from pydantic import BaseModel
 
 # --- 4. Local/Project-Specific Imports ---
 # These imports now work because the path was appended in step 1.
-from config.config import DATA_FILE, EMBEDDING_MODEL
-from ingestion.ingest import append_data_to_opensearch, get_opensearch_client, ingest_data_to_opensearch
-from retrieval.query import hybrid_retriever
+from config.config import DATA_DIR, EMBEDDING_MODEL, INDEX_NAME 
+# NOTE: Removed append_data_to_opensearch import as it is missing from ingest.py
+from ingestion.ingest import get_opensearch_client, ingest_data_to_opensearch
+# Alias the functioning simple_hybrid_retriever to the expected name
+from retrieval.query import simple_hybrid_retriever as hybrid_retriever 
+
+
 # Define the expected output structure using Pydantic's BaseModel
 class Context(BaseModel):
     # Defines the structure of a single retrieved chunk
@@ -51,7 +55,7 @@ except Exception as e:
     raise Exception("Service failed to initialize core clients.")
 
 
-# --- API Endpoint ---
+# --- API Endpoint (Retrieval) ---
 @app.post("/retrieve", response_model=ContextResponse)
 def retrieve_context(body: dict):
     """
@@ -64,16 +68,13 @@ def retrieve_context(body: dict):
         raise HTTPException(status_code=400, detail="The 'query' field is required in the request body.")
 
     # 1. Execute the Hybrid Search using the imported function
-    # The hybrid_retriever returns a list of LangChain Document objects
     retrieved_docs = hybrid_retriever(user_query, OS_CLIENT, EMBEDDINGS)
 
     # 2. Format LangChain Documents for API response
-    context_list = []
-    for doc in retrieved_docs:
-        context_list.append({
-            "content": doc.page_content,
-            "metadata": doc.metadata
-        })
+    context_list = [
+        {"content": doc.page_content, "metadata": doc.metadata}
+        for doc in retrieved_docs
+    ]
 
     if not context_list:
         return {
@@ -90,7 +91,7 @@ def retrieve_context(body: dict):
         "context": context_list
     }
 
-# --- NEW INGESTION ENDPOINT ---
+# --- INGESTION ENDPOINT (Full Reindex) ---
 @app.post("/ingest/full")
 async def ingest_full_data(
     file: Annotated[UploadFile, File()], # The uploaded JSON file
@@ -98,31 +99,31 @@ async def ingest_full_data(
 ):
     """
     Uploads a new data file and runs the full ingestion pipeline.
-
+    
     Accepts:
     - file: The JSON file containing the risk data.
     - force_reindex: If True, deletes and recreates the index before loading.
     """
-    filename_parts = file.filename.split('.') if file.filename else []
-    if not filename_parts or filename_parts[-1].lower() != 'json':
+    if not file.filename or not file.filename.lower().endswith('.json'):
         raise HTTPException(status_code=400, detail="Only JSON files are accepted.")
 
-    # 1. Save the uploaded file temporarily
-    # We use a temporary file path from the source data dir for ingestion logic compatibility
-    temp_file_path = Path(DATA_FILE)
+    # 1. Define the temporary save path within the DATA_DIR (e.g., data/uploaded.json)
+    temp_file_path = Path(DATA_DIR) / file.filename 
 
     try:
-        # FastAPI's UploadFile uses a file-like object; copy its content to a temp file
+        # Save the uploaded file content
         with temp_file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 2. Call the core ingestion function
+        # 2. Call the core ingestion function (expects a list of filenames and directory)
         print(f"\n--- API Triggered Ingestion: {file.filename} (Reindex: {force_reindex}) ---")
-        ingest_data_to_opensearch(str(temp_file_path), force_reindex=force_reindex)
+        
+        # ingest_data_to_opensearch expects (file_names_list, data_dir, force_reindex)
+        ingest_data_to_opensearch([file.filename], DATA_DIR, force_reindex=force_reindex)
 
         return {
             "status": "Ingestion Triggered",
-            "message": f"Successfully processed and indexed data from {file.filename}.",
+            "message": f"Successfully processed and indexed data from {file.filename} into index: {INDEX_NAME}.",
             "reindex_mode": force_reindex
         }
     except Exception as e:
@@ -133,35 +134,16 @@ async def ingest_full_data(
         if temp_file_path.exists():
             temp_file_path.unlink()
 
-# --- NEW APPEND ENDPOINT (Optional, for incremental updates) ---
-@app.post("/ingest/append")
-async def ingest_append_data(
-    file: Annotated[UploadFile, File()]
-):
-    """
-    Uploads a new data file and appends documents to the existing index.
-    """
-    filename_parts = file.filename.split('.') if file.filename else []
-    if not filename_parts or filename_parts[-1].lower() != 'json':
-        raise HTTPException(status_code=400, detail="Only JSON files are accepted.")
 
-    temp_file_path = Path(DATA_FILE)
-
-    try:
-        with temp_file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        print(f"\n--- API Triggered Append: {file.filename} ---")
-        append_data_to_opensearch(str(temp_file_path))
-
-        return {
-            "status": "Append Triggered",
-            "message": f"Successfully appended data from {file.filename} to index.",
-        }
-    except Exception as e:
-        print(f"Append failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Append failed: {e}")
-    finally:
-        pass
-        # if temp_file_path.exists():
-        #     temp_file_path.unlink()
+# # --- NEW APPEND ENDPOINT (Incremental Updates) ---
+# @app.post("/ingest/append")
+# async def ingest_append_data(
+#     file: Annotated[UploadFile, File()]
+# ):
+#     """
+#     [COMMENTED OUT] This endpoint requires the 'append_data_to_opensearch' function 
+#     to be implemented in ingestion/ingest.py.
+#     """
+#     # NOTE: If implementing later, use the same logic as /ingest/full but call 
+#     # append_data_to_opensearch([file.filename], DATA_DIR)
+#     raise HTTPException(status_code=501, detail="Incremental ingestion endpoint not implemented in backend.")
