@@ -14,6 +14,7 @@ from typing import Annotated, Optional, List, Dict, Any
 
 # --- 3. Third-party Library Imports (Alphabetical) ---
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware # IMPORT ADDED HERE
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel
 
@@ -43,6 +44,18 @@ app = FastAPI(
     title="Risk RAG Retrieval API",
     description="Provides context-aware risk findings via Hybrid Search using OpenSearch and Google Embeddings."
 )
+
+# --- CORS MIDDLEWARE CONFIGURATION ADDED HERE ---
+# Allowing all origins, headers, and methods for easy local/POC testing.
+# WARNING: Restrict 'allow_origins' in production for security.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (POST, GET, OPTIONS, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
+# --------------------------------------------------
 
 try:
     # Initialize shared clients globally
