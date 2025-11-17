@@ -1,4 +1,4 @@
 # src/retrieval/__init__.py
 
 # Expose the main retrieval function
-from .query import hybrid_retriever
+from .query import simple_hybrid_retriever
