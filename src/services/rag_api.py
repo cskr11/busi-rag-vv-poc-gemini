@@ -4,7 +4,6 @@
 import sys
 import os
 # This line must execute before 'config' is imported.
-# It adds the project root (where 'config' is) to the Python search path.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # --- 2. Standard Library Imports (Alphabetical) ---
@@ -14,16 +13,14 @@ from typing import Annotated, Optional, List, Dict, Any
 
 # --- 3. Third-party Library Imports (Alphabetical) ---
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
-from fastapi.middleware.cors import CORSMiddleware # IMPORT ADDED HERE
+from fastapi.middleware.cors import CORSMiddleware
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel
 
 # --- 4. Local/Project-Specific Imports ---
-# These imports now work because the path was appended in step 1.
-from config.config import DATA_DIR, EMBEDDING_MODEL, INDEX_NAME 
-# NOTE: Removed append_data_to_opensearch import as it is missing from ingest.py
+# NOTE: DATA_FILE_NAMES is assumed to be imported from config.config
+from config.config import DATA_DIR, DATA_FILE_NAMES, EMBEDDING_MODEL, INDEX_NAME 
 from ingestion.ingest import get_opensearch_client, ingest_data_to_opensearch
-# Alias the functioning simple_hybrid_retriever to the expected name
 from retrieval.query import simple_hybrid_retriever as hybrid_retriever 
 
 
@@ -38,22 +35,20 @@ class ContextResponse(BaseModel):
     query: str
     status: str
     count: int
-    context: List[Context] # <-- Use the Pydantic model here
+    context: List[Context]
 
 app = FastAPI(
     title="Risk RAG Retrieval API",
     description="Provides context-aware risk findings via Hybrid Search using OpenSearch and Google Embeddings."
 )
 
-# --- CORS MIDDLEWARE CONFIGURATION ADDED HERE ---
-# Allowing all origins, headers, and methods for easy local/POC testing.
-# WARNING: Restrict 'allow_origins' in production for security.
+# --- CORS MIDDLEWARE CONFIGURATION ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],  # Allows all origins (WARNING: Restrict this in production)
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (POST, GET, OPTIONS, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 # --------------------------------------------------
 
@@ -104,59 +99,81 @@ def retrieve_context(body: dict):
         "context": context_list
     }
 
-# --- INGESTION ENDPOINT (Full Reindex) ---
-@app.post("/ingest/full")
-async def ingest_full_data(
+# --- NEW INGESTION ENDPOINT (Full Reindex from Configured Local Files) ---
+@app.post("/ingest/configured_full", status_code=200)
+def ingest_configured_data(
+    # By default, force_reindex is True for a full re-initialization from local files
+    force_reindex: Annotated[bool, Form()] = True 
+):
+    """
+    Triggers a full reindex using the pre-configured list of files 
+    (DATA_FILE_NAMES) from the local data path (DATA_DIR).
+    This strictly uses local, pre-defined data paths.
+    """
+    try:
+        print(f"\n--- API Triggered Full Reindex from Local Path (Files: {DATA_FILE_NAMES}) (Reindex: {force_reindex}) ---")
+        
+        # 1. Check if configured files exist
+        missing_files = [f for f in DATA_FILE_NAMES if not Path(DATA_DIR).joinpath(f).exists()]
+        if missing_files:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Required configuration data files not found in {DATA_DIR}: {', '.join(missing_files)}"
+            )
+
+        # 2. Call the core ingestion function with the configured file list and directory
+        ingest_data_to_opensearch(DATA_FILE_NAMES, DATA_DIR, force_reindex=force_reindex)
+
+        return {
+            "status": "Configured Ingestion Complete",
+            "message": f"Successfully processed and indexed {len(DATA_FILE_NAMES)} files from local path {DATA_DIR} into index: {INDEX_NAME}.",
+            "reindex_mode": force_reindex
+        }
+    except HTTPException:
+        # Re-raise explicit HTTP exceptions (like 404)
+        raise
+    except Exception as e:
+        print(f"Configured Ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Configured ingestion failed: {e}")
+
+
+# --- ORIGINAL INGESTION ENDPOINT (Handles Uploaded File) ---
+@app.post("/ingest/upload", status_code=200) 
+async def ingest_full_data_from_upload(
     file: Annotated[UploadFile, File()], # The uploaded JSON file
     force_reindex: Annotated[bool, Form()] = False # The flag for reindexing
 ):
     """
-    Uploads a new data file and runs the full ingestion pipeline.
-    
-    Accepts:
-    - file: The JSON file containing the risk data.
-    - force_reindex: If True, deletes and recreates the index before loading.
+    Uploads a new data file, saves it locally, and then runs the ingestion pipeline 
+    on only that file. The file is saved to DATA_DIR.
     """
     if not file.filename or not file.filename.lower().endswith('.json'):
         raise HTTPException(status_code=400, detail="Only JSON files are accepted.")
 
-    # 1. Define the temporary save path within the DATA_DIR (e.g., data/uploaded.json)
+    # 1. Define the temporary save path within the DATA_DIR (e.g., data/uploaded_file.json)
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
     temp_file_path = Path(DATA_DIR) / file.filename 
 
     try:
-        # Save the uploaded file content
+        # Save the uploaded file content efficiently using shutil.copyfileobj
         with temp_file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 2. Call the core ingestion function (expects a list of filenames and directory)
-        print(f"\n--- API Triggered Ingestion: {file.filename} (Reindex: {force_reindex}) ---")
+        # 2. Call the core ingestion function (only processes the single uploaded file)
+        print(f"\n--- API Triggered Upload Ingestion: {file.filename} (Reindex: {force_reindex}) ---")
         
-        # ingest_data_to_opensearch expects (file_names_list, data_dir, force_reindex)
+        # ingest_data_to_opensearch expects a list of filenames
         ingest_data_to_opensearch([file.filename], DATA_DIR, force_reindex=force_reindex)
 
         return {
             "status": "Ingestion Triggered",
-            "message": f"Successfully processed and indexed data from {file.filename} into index: {INDEX_NAME}.",
+            "message": f"Successfully processed and indexed data from uploaded file {file.filename} into index: {INDEX_NAME}. File remains saved in {DATA_DIR}.",
             "reindex_mode": force_reindex
         }
     except Exception as e:
         print(f"Ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
     finally:
-        # 3. Clean up the temporary file
-        if temp_file_path.exists():
-            temp_file_path.unlink()
-
-
-# # --- NEW APPEND ENDPOINT (Incremental Updates) ---
-# @app.post("/ingest/append")
-# async def ingest_append_data(
-#     file: Annotated[UploadFile, File()]
-# ):
-#     """
-#     [COMMENTED OUT] This endpoint requires the 'append_data_to_opensearch' function 
-#     to be implemented in ingestion/ingest.py.
-#     """
-#     # NOTE: If implementing later, use the same logic as /ingest/full but call 
-#     # append_data_to_opensearch([file.filename], DATA_DIR)
-#     raise HTTPException(status_code=501, detail="Incremental ingestion endpoint not implemented in backend.")
+        # FastAPI's UploadFile requires the underlying file to be closed, 
+        # which happens implicitly when the request completes or explicitly via file.file.close()
+        pass
