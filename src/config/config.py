@@ -6,14 +6,14 @@ dotenv.load_dotenv()
 
 # --- OpenSearch Configuration ---
 OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
-INDEX_NAME = os.getenv("OPENSEARCH_INDEX", "rag_documents_vectorstore_business_vv")
+INDEX_NAME = os.getenv("OPENSEARCH_RISK_INDEX", "rag_documents_vectorstore_business_risks")
 
 # --- Model Configuration ---
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-004")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash-preview-09-2025")
 
 # --- Data Ingestion Configuration ---
-DATA_FILE_NAMES = ['ibm.json', 'myntra.json']
+DATA_FILE_NAMES = ['multi_records.json']
 
 # Robustly resolve the data directory relative to this config file
 # If config.py is in src/config/, this points to src/../data (i.e., root/data)
