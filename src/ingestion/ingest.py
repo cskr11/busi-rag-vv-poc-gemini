@@ -153,6 +153,7 @@ def process_to_review_structure(record: Dict) -> List[Document]:
                     f"(Search Term: {search_term})\n"
                     f"Risk Category: {category}\n"        # Context Line 1
                     f"Risk Subcategory: {subcategory}\n"  # Context Line 2
+                    f"Priority Value: {priority}\n"       # <-- ADDED THIS LINE
                     f"Finding Detail: {finding_text}\n"
                     f"Explanation: {explanation_text}\n"
                     f"Source: {source_name}\n"

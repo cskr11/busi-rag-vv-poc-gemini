@@ -206,7 +206,12 @@ async def get_llm_response(full_prompt: str, context: str):
         "You are a risk analysis assistant. Answer the user question based ONLY on the provided context. "
         "If the user asks for a specific risk category (e.g., 'Adversarial Supply Chain'), "
         "ignore findings in the context that do not match that category. "
-        "Be precise and cite the Source ID for every claim."
+        "The response MUST be a clear, itemized list of distinct risk findings. "
+        "For EACH distinct finding, you MUST find and include the following structured information from the context: "
+        "1. **Risk Category/Subcategory** (as a heading or bolded line) "
+        "2. **Priority** (MUST explicitly state the 'Priority Value' found in the context) " # <-- CLARIFIED INSTRUCTION
+        "3. A concise summary of the **Finding Detail** "
+        "4. The corresponding **Source ID** (e.g., '[SourceID: KJg4LodEhzcuN25xIQ0_gpdc3L18=]') "
     )
 
     prompt_with_context = (
