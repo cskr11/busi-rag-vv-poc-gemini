@@ -1,0 +1,48 @@
+version: '3'
+
+services:
+  # --- 1. Vector Database ---
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: opensearch_node
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true # Disabled for simple local dev (matches your python code)
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m" # Adjust heap size as needed
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+  # --- 2. Visualization UI (Optional) ---
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.0
+    container_name: opensearch_dashboards
+    ports:
+      - "5601:5601"
+    environment:
+      - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]'
+      - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"
+    depends_on:
+      - opensearch
+
+  # --- 3. Your RAG Application ---
+  rag-app:
+    build: .
+    container_name: python_rag_api
+    volumes:
+      - ./:/app # Mounts current dir to /app so code changes apply instantly (Hot Reload)
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENSEARCH_URL=http://opensearch:9200
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY} # Reads from your local .env file
+      - EMBEDDING_MODEL=models/text-embedding-004
+      - LLM_MODEL=gemini-1.5-pro
+      - INDEX_NAME=rag_documents_vectorstore_business_vv
+    depends_on:
+      - opensearch
+
+volumes:
+  opensearch-data:
