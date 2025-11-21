@@ -13,7 +13,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-004")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash-preview-09-2025")
 
 # --- Data Ingestion Configuration ---
-DATA_FILE_NAMES = ['multi_records.json']
+DATA_FILE_NAMES = ['cognizant_risks.json','ibm_risks.json','myntra_risks.json']     
 
 # Robustly resolve the data directory relative to this config file
 # If config.py is in src/config/, this points to src/../data (i.e., root/data)

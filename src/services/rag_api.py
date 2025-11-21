@@ -107,25 +107,24 @@ async def chat_with_rag(request: RetrievalRequest):
             context=[]
         )
 
-    # 3. Format Context for LLM
+    # 3. Format Context for LLM (KEEP context_list for the response model)
     # FIX (Issue 3): Explicitly construct Pydantic Context objects from the dict list
     context_list = [
         Context(content=d.page_content, metadata=d.metadata)
         for d in docs
     ]
-    context_str = "\n".join([
-        f"[Doc {i+1} from {d.metadata.get('file_source_tag', 'N/A')}] {d.page_content.strip().replace('\n', ' ')}"
-        for i, d in enumerate(docs)
-    ])
 
-    # 4. Generate Final LLM Response (Pass the original query for final instruction)
-    response_text = await get_llm_response(request.query, context_str, retrieval_k)
+    # --- REMOVED: context_str creation here as it's now handled in get_llm_response ---
+
+    # 4. Generate Final LLM Response (Pass the original query and the documents list)
+    # FIX: Update call to match the two-argument signature in query.py
+    response_text = await get_llm_response(request.query, docs)
 
     return ChatResponse(
         query=request.query,
         search_query=search_query,
         response=response_text,
-        context=context_list # context_list is now List[Context]
+        context=context_list
     )
 
 
@@ -140,6 +139,7 @@ def ingest_configured_data(force_reindex: bool = Form(True)):
             raise HTTPException(404, detail=f"Missing files in {DATA_DIR}: {missing}")
 
         ingest_data_to_opensearch(DATA_FILE_NAMES, DATA_DIR, force_reindex=force_reindex)
+
         return {"status": "Success", "message": f"Indexed {len(DATA_FILE_NAMES)} files."}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
