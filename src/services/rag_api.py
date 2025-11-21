@@ -71,22 +71,31 @@ async def chat_with_rag(request: RetrievalRequest):
     if not OS_CLIENT or not EMBEDDINGS:
         raise HTTPException(status_code=503, detail="Search services unavailable.")
 
-    # FIX: Ensure request.history is treated as an empty list if it is None.
+    # ... (initial checks and history handling remain the same)
     safe_history = request.history if request.history is not None else []
     history_list = [{"role": msg.role, "text": msg.text} for msg in safe_history]
 
-    # FIX (Issue 4): Coalesce request.k to K_VALUE if it is None
-    retrieval_k = request.k if request.k is not None else K_VALUE
-
-    # 1. Condense Query: Make the search context-aware
+    # Check for "Show All" intent in the query
+    lowered_query = request.query.lower()
+    is_show_all_query = any(phrase in lowered_query for phrase in ["all risks", "show me all", "show all", "give me all"])
+    print("is_show_all_query for query: ", request.query, "is: ", is_show_all_query)
+    # 1. Condense Query (Search query is still necessary)
     search_query = await condense_query(history_list, request.query)
 
-    # 2. Retrieve Documents using the condensed query
+    # 2. Determine K dynamically
+    # If the user intent is "show all", override k to a high limit (e.g., 50), otherwise use request.k or K_VALUE.
+    if is_show_all_query:
+        retrieval_k = 50 # Overriding for high recall on broad search
+    else:
+        # If not a "show all" query, use the requested k or default K_VALUE (which is small)
+        retrieval_k = request.k if request.k is not None else K_VALUE
+
+    # 3. Retrieve Documents using the determined k value
     docs = simple_hybrid_retriever(
         search_query=search_query,
         client=OS_CLIENT,
         embeddings=EMBEDDINGS,
-        k=retrieval_k, # Use the guaranteed int k value
+        k=retrieval_k,  # Use the dynamic k value
         filters=request.filters
     )
 
@@ -110,7 +119,7 @@ async def chat_with_rag(request: RetrievalRequest):
     ])
 
     # 4. Generate Final LLM Response (Pass the original query for final instruction)
-    response_text = await get_llm_response(request.query, context_str)
+    response_text = await get_llm_response(request.query, context_str, retrieval_k)
 
     return ChatResponse(
         query=request.query,

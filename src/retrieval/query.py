@@ -94,6 +94,7 @@ def simple_hybrid_retriever(
     Performs Hybrid Search with Strict Phrase Boosting.
     Prioritizes documents that contain the exact search phrase.
     """
+    print(f" simple_hybrid_retriever called with query: {search_query}, for filters: {filters}, k-results: {k}")
     # 1. Vector Search (Concepts)
     vector_results = []
     try:
@@ -111,6 +112,7 @@ def simple_hybrid_retriever(
             search_type="script_scoring",
             pre_filter=filters
         )
+    
     except Exception as e:
         print(f"Vector search failed: {e}")
 
@@ -198,21 +200,29 @@ def simple_hybrid_retriever(
 
 # --- Generation Logic ---
 
-async def get_llm_response(full_prompt: str, context: str):
+async def get_llm_response(full_prompt: str, context: str, doc_count: int): # <-- Accept doc_count
     if not API_KEY:
         return "LLM API Key missing."
 
+    # --- RESTRUCTURED SYSTEM INSTRUCTION ---
     system_instruction = (
-        "You are a risk analysis assistant. Answer the user question based ONLY on the provided context. "
-        "If the user asks for a specific risk category (e.g., 'Adversarial Supply Chain'), "
-        "ignore findings in the context that do not match that category. "
-        "The response MUST be a clear, itemized list of distinct risk findings. "
-        "For EACH distinct finding, you MUST find and include the following structured information from the context: "
-        "1. **Risk Category/Subcategory** (as a heading or bolded line) "
-        "2. **Priority** (MUST explicitly state the 'Priority Value' found in the context) " # <-- CLARIFIED INSTRUCTION
-        "3. A concise summary of the **Finding Detail** "
-        "4. The corresponding **Source ID** (e.g., '[SourceID: KJg4LodEhzcuN25xIQ0_gpdc3L18=]') "
+        "You are a risk analysis assistant. Your primary task is to consolidate ALL provided context documents into a comprehensive report. "
+        "The user wants ALL risks found (Total documents retrieved: "
+        f"{doc_count}). Answer based ONLY on the provided context. "
+        "Your final response MUST be structured into exactly three sections: "
+        
+        "### 1. Risk Summary in a Nutshell"
+        "Generate a brief, high-level summary paragraph. State the number of distinct risk findings found and list all major Risk Categories present."
+        
+        "### 2. Matched Documents (Structured List)"
+        "For EACH document provided in the '--- METADATA LIST START ---' block, create a clear, itemized markdown list containing only the following fields in this exact order: Entity Name, Risk Category, Risk Subcategory, Priority Value, and Source ID. Extract these values directly from the Metadata blocks."
+        
+        "### 3. Retrieved Content"
+        "List the full, raw content of EACH risk document found in the '--- FULL PAGE CONTENT LIST START ---' block. For each document, prepend the content with a bolded header like: **[Document X Full Content]**"
+        
+        "\n\nBegin your response immediately, starting with '### 1. Risk Summary in a Nutshell'."
     )
+    # --- END RESTRUCTURED SYSTEM INSTRUCTION ---
 
     prompt_with_context = (
         f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---\n\n"
@@ -241,7 +251,7 @@ async def run_context_aware_rag(new_prompt: str, history: Optional[List] = None,
         f"[Doc SourceID: {d.metadata.get('source_id', 'N/A')}] {d.page_content.strip().replace(chr(10), ' ')}"
         for d in docs
     ])
-    return await get_llm_response(new_prompt, context_str)
+    return await get_llm_response(new_prompt, context_str, k)
 
 if __name__ == "__main__":
     # CLI Test
